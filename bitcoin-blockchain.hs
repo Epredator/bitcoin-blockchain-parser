@@ -20,6 +20,7 @@ getResponseScripts block = scripts
   where trans = transactions block
         inp = concatMap transactioninputs trans
         scripts = map responsescript inp
+        
 parseFiles = do
   home <- getHomeDirectory
   c <- getDirectoryContents $ home++"/.bitcoin/blocks/"
@@ -28,7 +29,8 @@ parseFiles = do
   return $ concat blocks
       
 parseFile f = do
-  raw <- BL.readFile $ "/home/fergie/.bitcoin/blocks/"++f
+  home <- getHomeDirectory
+  raw <- BL.readFile $ home++"/.bitcoin/blocks/"++f
   let blocks = runGet getBlocks raw
   return blocks
       
