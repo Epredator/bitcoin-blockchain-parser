@@ -20,15 +20,9 @@ getResponseScripts block = scripts
   where trans = transactions block
         inp = concatMap transactioninputs trans
         scripts = map responsescript inp
-
-checkFile f = do
-  print $ "Checking "++f
-  raw <- BL.readFile $ "/home/fergie/.bitcoin/blocks/"++f
-  let blocks = runGet getBlocks raw
-  print $ filter (\x -> magic x /= "f9beb4d9") blocks
-
 parseFiles = do
-  c <- getDirectoryContents "/home/fergie/.bitcoin/blocks/"
+  home <- getHomeDirectory
+  c <- getDirectoryContents $ home++"/.bitcoin/blocks/"
   let blockfiles = init $ sort $ filter (\x -> take 3 x == "blk") c
   blocks <- mapM parseFile blockfiles
   return $ concat blocks
