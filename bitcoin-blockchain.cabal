@@ -54,7 +54,9 @@ executable bitcoin-blockchain
   -- other-modules:       
   
   -- LANGUAGE extensions used by modules in this package.
-  -- other-extensions:    
+  -- other-extensions:
+
+  ghc-options: -Wall -O2
   
   -- Other library packages from which modules are imported.
   build-depends:       base >=4.6 && <4.7
@@ -64,6 +66,8 @@ executable bitcoin-blockchain
                       ,directory
                       ,bytedump
                       ,binary
+                      ,conduit
+                      ,binary-conduit
   
   -- Directories containing source files.
   -- hs-source-dirs:      
