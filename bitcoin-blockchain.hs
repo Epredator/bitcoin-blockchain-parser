@@ -25,7 +25,7 @@ import Data.Char
 --reads from stdin
 --parses blocks
 --prints to stdout
---main = source $$ conduit =$ CL.mapM_ print
+main = source $$ conduit =$ CL.mapM_ print
 
 source :: Source IO BS.ByteString
 source = CB.sourceHandle stdin
@@ -51,10 +51,6 @@ parseFile f = do
   let blocks = runGet getBlocks raw
   return $ blocks
 
-findMismatch (x:y:xs)
-  | previousblockhash (snd y) /= currenthash (snd x) = [x,y]
-  | otherwise = findMismatch (y:xs)
-
 data Block = Block {
                magic :: !T.Text,
                blocklength :: !Int,
@@ -67,7 +63,7 @@ data Block = Block {
                currenthash :: !BS.ByteString,
                numberoftransactions :: !Int,
                transactions :: [Transaction]
-               } deriving (Show)
+               } deriving (Show,Eq)
 
 data Transaction = Transaction {
                      transactionversion :: !Int,
@@ -75,8 +71,9 @@ data Transaction = Transaction {
                      transactioninputs :: [Input],
                      transactionoutputcount :: !Int,
                      transactionoutputs :: [Output],
-                     transactionlocktime :: !Int
-                     } deriving (Show)
+                     transactionlocktime :: !Int,
+                     transactionhash :: BS.ByteString --must be lazy because of weird way I compute it later
+                     } deriving (Show,Eq)
                    
 data Input = Input {
               inputhash :: !BS.ByteString,
@@ -84,13 +81,13 @@ data Input = Input {
               responsescriptlength :: !Int,
               responsescript :: !BS.ByteString,
               sequencenumber :: !T.Text
-              } deriving (Show)
+              } deriving (Show,Eq)
 
 data Output = Output {
                outputvalue :: !Int,
                challengescriptlength :: !Int,
                challengescript :: !BS.ByteString
-               } deriving Show
+               } deriving (Show,Eq)
 
 getBlock :: Get Block
 getBlock = do
@@ -137,12 +134,28 @@ getTransaction = do
   outputc <- getVarLengthInt
   outputs <- replicateM (fromIntegral outputc) getOutput
   locktime <- getWord32le
-  return $! Transaction (fromIntegral ver)
-                       (fromIntegral inputc)
-                       inputs
-                       (fromIntegral outputc)
-                       outputs
-                       (fromIntegral locktime)
+  let t = Transaction (fromIntegral ver)
+                      (fromIntegral inputc)
+                      inputs
+                      (fromIntegral outputc)
+                      outputs
+                      (fromIntegral locktime)
+  return $ hashTransaction t
+
+hashTransaction :: (C.ByteString -> Transaction) -> Transaction
+hashTransaction t = t (encode hash)
+  where trans = t undefined -- undefined is never evaluated. This is a bit weird
+        p = runPut $ putTransaction trans
+        hash = SHA256.hash $ SHA256.hash $ BS.concat $ BL.toChunks p
+
+putTransaction :: Transaction -> PutM ()
+putTransaction t = do
+  putWord32le $ fromIntegral $ transactionversion t
+  putVarLengthInt $ transactioninputcount t
+  mapM_ putInput $ transactioninputs t
+  putVarLengthInt $ transactionoutputcount t
+  mapM_ putOutput $ transactionoutputs t
+  putWord32le $ fromIntegral $ transactionlocktime t
                  
 
 getInput :: Get Input
@@ -158,6 +171,14 @@ getInput = do
                  (encode script)
                  (textHex seqnum)
 
+putInput :: Input -> PutM ()
+putInput i = do
+  putByteString $ fst $ Data.ByteString.Base16.decode $ inputhash i
+  putByteString $ fst $ Data.ByteString.Base16.decode $ C.pack $ T.unpack $ inputtransactionindex i
+  putVarLengthInt $ responsescriptlength i
+  putByteString $ fst $ Data.ByteString.Base16.decode $ responsescript i
+  putByteString $ fst $ Data.ByteString.Base16.decode $ C.pack $ T.unpack $ sequencenumber i
+  
 getOutput :: Get Output
 getOutput = do
   val <- getWord64le
@@ -166,6 +187,12 @@ getOutput = do
   return $! Output (fromIntegral val)
                   (fromIntegral slength)
                   (encode script)
+
+putOutput :: Output -> PutM ()
+putOutput o = do
+  putWord64le $ fromIntegral $ outputvalue o
+  putVarLengthInt $ challengescriptlength o
+  putByteString $ fst $ Data.ByteString.Base16.decode $ challengescript o
 
 getBlocks :: Get [Block]
 getBlocks = do
@@ -191,3 +218,14 @@ getVarLengthInt = do
       val <- getWord64le
       return $! fromIntegral val
     otherwise -> return $! fromIntegral w
+
+putVarLengthInt i
+  | i < 0xfd = putWord8 (fromIntegral i)
+  | i < 0xffff = do
+      putWord8 (fromIntegral 0xfd)
+      putWord16le (fromIntegral i)
+  | i < 0xffffffff = do
+      putWord8 (fromIntegral 0xfe)
+      putWord32le (fromIntegral i)
+  | otherwise = do
+      putWord64le (fromIntegral i)
