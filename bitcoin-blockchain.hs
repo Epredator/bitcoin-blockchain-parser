@@ -3,13 +3,14 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString as BS
 import Data.Binary hiding (encode)
 import Data.Binary.Get
+import Data.Binary.Put
 import Control.Monad
 import Text.Bytedump
 import System.Directory
 import Data.List (sort)
 import Numeric
 import qualified Data.Text as T
-import Data.ByteString.Base16 (encode)
+import Data.ByteString.Base16 (encode,decode)
 
 import Data.Conduit.Serialization.Binary
 import qualified Data.Conduit.Binary as CB
@@ -17,10 +18,14 @@ import qualified Data.Conduit.List as CL
 import Data.Conduit
 import System.IO
 
+import qualified Crypto.Hash.SHA256 as SHA256
+import qualified Data.ByteString.Char8 as C
+import Data.Char
+
 --reads from stdin
 --parses blocks
 --prints to stdout
-main = source $$ conduit =$ CL.mapM_ print
+--main = source $$ conduit =$ CL.mapM_ print
 
 source :: Source IO BS.ByteString
 source = CB.sourceHandle stdin
@@ -46,6 +51,10 @@ parseFile f = do
   let blocks = runGet getBlocks raw
   return $ blocks
 
+findMismatch (x:y:xs)
+  | previousblockhash (snd y) /= currenthash (snd x) = [x,y]
+  | otherwise = findMismatch (y:xs)
+
 data Block = Block {
                magic :: !T.Text,
                blocklength :: !Int,
@@ -55,6 +64,7 @@ data Block = Block {
                timestamp :: !Int,
                bits :: !T.Text,
                nonce :: !T.Text,
+               currenthash :: !BS.ByteString,
                numberoftransactions :: !Int,
                transactions :: [Transaction]
                } deriving (Show)
@@ -91,15 +101,23 @@ getBlock = do
   case (textHex mag) of
     "f9beb4d9" -> do
       blength <- getWord32le
-      bformatv <- getWord32le
-      pblockh <- getByteString 32
-      merkle <- getByteString 32
-      t <- getWord32le
-      b <- getWord32be
-      n <- getWord32be
+      header <- getByteString 80
+      let bheader = runGet (getBlockHeader mag blength) (BL.fromStrict header)
       tnumber <- getVarLengthInt
       trans <- replicateM (fromIntegral tnumber) getTransaction
-      return $! Block (textHex mag)
+      return $! bheader (encode $ SHA256.hash $ SHA256.hash header)
+                        (fromIntegral tnumber)
+                        trans
+    otherwise -> getBlock
+
+getBlockHeader mag blength = do
+  bformatv <- getWord32le 
+  pblockh <- getByteString 32
+  merkle <- getByteString 32
+  t <- getWord32le
+  b <- getWord32be
+  n <- getWord32be
+  return $ Block (textHex mag)
                  (fromIntegral blength)
                  (fromIntegral bformatv)
                  (encode pblockh)
@@ -107,10 +125,7 @@ getBlock = do
                  (fromIntegral t)
                  (textHex b)
                  (textHex n)
-                 (fromIntegral tnumber)
-                 trans
-    otherwise -> getBlock
-
+  
 textHex :: Word32 -> T.Text
 textHex x = T.pack $! showHex x ""
 
@@ -175,4 +190,4 @@ getVarLengthInt = do
     "ff" -> do
       val <- getWord64le
       return $! fromIntegral val
-    otherwise -> return $! fromIntegral w  
+    otherwise -> return $! fromIntegral w
