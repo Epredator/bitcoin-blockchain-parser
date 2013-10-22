@@ -25,7 +25,9 @@ import Data.Char
 --reads from stdin
 --parses blocks
 --prints to stdout
-main = source $$ conduit =$ CL.mapM_ print
+main = do
+  c <- source $$ conduit =$ countBlocks --CL.mapM_ print
+  print c
 
 source :: Source IO BS.ByteString
 source = CB.sourceHandle stdin
@@ -35,6 +37,9 @@ sink = CL.mapM_ print
 
 conduit :: Conduit BS.ByteString IO Block
 conduit = conduitGet getBlock
+
+
+countBlocks = CL.fold (\x _ -> x+1) 0
 
 parseFiles :: IO [Block]
 parseFiles = do
@@ -49,7 +54,7 @@ parseFile f = do
   home <- getHomeDirectory
   raw <- BL.readFile $ home++"/.bitcoin/blocks/"++f
   let blocks = runGet getBlocks raw
-  return $ blocks
+  return blocks
 
 data Block = Block {
                magic :: !T.Text,
@@ -95,7 +100,7 @@ getBlock = do
   --sometimes (only in blk00066.dat so far) there are long periods of zeros
   --I don't know what these mean, but it messes up the parsing.
   --So if a block doesn't start with f9beb4d9 then skip forward until it does
-  case (textHex mag) of
+  case textHex mag of
     "f9beb4d9" -> do
       blength <- getWord32le
       header <- getByteString 80
@@ -148,7 +153,7 @@ hashTransaction t = t (encode hash)
         p = runPut $ putTransaction trans
         hash = SHA256.hash $ SHA256.hash $ BS.concat $ BL.toChunks p
 
-putTransaction :: Transaction -> PutM ()
+putTransaction :: Transaction -> Put
 putTransaction t = do
   putWord32le $ fromIntegral $ transactionversion t
   putVarLengthInt $ transactioninputcount t
@@ -171,7 +176,7 @@ getInput = do
                  (encode script)
                  (textHex seqnum)
 
-putInput :: Input -> PutM ()
+putInput :: Input -> Put
 putInput i = do
   putByteString $ fst $ Data.ByteString.Base16.decode $ inputhash i
   putByteString $ fst $ Data.ByteString.Base16.decode $ C.pack $ T.unpack $ inputtransactionindex i
@@ -188,7 +193,7 @@ getOutput = do
                   (fromIntegral slength)
                   (encode script)
 
-putOutput :: Output -> PutM ()
+putOutput :: Output -> Put
 putOutput o = do
   putWord64le $ fromIntegral $ outputvalue o
   putVarLengthInt $ challengescriptlength o
@@ -219,13 +224,13 @@ getVarLengthInt = do
       return $! fromIntegral val
     otherwise -> return $! fromIntegral w
 
+putVarLengthInt :: Int -> Put
 putVarLengthInt i
   | i < 0xfd = putWord8 (fromIntegral i)
   | i < 0xffff = do
-      putWord8 (fromIntegral 0xfd)
+      putWord8 0xfd
       putWord16le (fromIntegral i)
   | i < 0xffffffff = do
-      putWord8 (fromIntegral 0xfe)
+      putWord8 0xfe
       putWord32le (fromIntegral i)
-  | otherwise = do
-      putWord64le (fromIntegral i)
+  | otherwise = putWord64le (fromIntegral i)
